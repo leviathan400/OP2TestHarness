@@ -43,6 +43,9 @@ struct Config {
   int players = 1;  // OP2H_PLAYERS: >1 selects the original's multiplayer defaults.
   int drawEvery = 0;  // Turbo only: render every N ticks (0 = only just before screenshots).
   int traceEvery = 0;  // trace.jsonl sample interval (0 = off).
+  // OP2H_DESKTOP: a person's real Windows desktop, not a private display: leave their pointer and focus alone (the
+  // harness feeds the game its own cursor; an off-screen or hidden window draws nothing, so screenshots need it shown).
+  bool desktop = false;
   bool turbo = true;
   bool presents = false;  // OP2H_PRESENTS: count pane presents per tick and per real second.
 } cfg;
@@ -1121,7 +1124,7 @@ CommandPacket TargetedPacket(int id, CommandType type, int x, int y, bool tile) 
   packet.data.attack.numUnits  = 1;
   packet.data.attack.unitID[0] = uint16(id);
   packet.data.attack.unknown   = 0;
-  packet.data.attack.target    = { uint16(x), uint16(tile ? y : 0xFFFF) };
+  packet.data.attack.target    = { { uint16(x) }, uint16(tile ? y : 0xFFFF) };
   return packet;
 }
 
@@ -2853,15 +2856,16 @@ void ParkCursor() {
   // Wine sends the game no mouse messages of its own (over a pane they would show button tooltips, for example).
   g_in.pos = { client.right - 90, client.bottom / 2 };
   g_in.active = true;
-  SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 1, GetSystemMetrics(SM_CYSCREEN) - 1);
+  if (!cfg.desktop) SetCursorPos(GetSystemMetrics(SM_CXSCREEN) - 1, GetSystemMetrics(SM_CYSCREEN) - 1);
   // Without a window manager the window is sometimes not yet active here (an X focus race). An inactive game ignores
   // view changes until it is activated, so make it the active, focused window now.
   const bool wasActive = g_tApp.AppActive() && GetFocus() == hWnd;
-  if (!wasActive) {
+  if (!wasActive && !cfg.desktop) {
     SetForegroundWindow(hWnd);
     SetActiveWindow(hWnd);
     SetFocus(hWnd);
   }
+  if (cfg.desktop) Log("desktop: pointer and focus left alone; game active %d", int(g_tApp.AppActive()));
   if (g_inputUsed) {
     Log("input: frame %p %s, now active %d paused %d focus %p, class style %lx", (void*)hWnd,
         wasActive ? "was active" : "activated", g_tApp.AppActive(), g_tApp.AppPaused(), (void*)GetFocus(),
@@ -4154,6 +4158,63 @@ ibool __fastcall LoadCampaignStateHook(void* self, void*, GameStartInfo* start) 
   return g_loadCampaignState(self, start);
 }
 
+// Mission DLLs are linked to load at 0x11000000, and some lack base relocations for their own import-table reads (the
+// OfficialDemos cde1, cdp1 and ml4_dm1: InitProc's `mov ecx, [0x11007234]` in cdp1 has none), so loaded anywhere else
+// they crash as soon as they run. Native Windows can hand that address to the game's own allocations before OPU loads
+// the mission (a 2.4 MB private block, measured on Windows 11 ARM64); Wine leaves it free. So on Windows the harness
+// reserves it from InitMod, frees it when OPU loads any DLL linked at that address (LoadLibraryExW), and takes it again
+// whenever that DLL is unloaded (a save's load unloads the mission and loads it again; so may a campaign's next mission).
+// Not under Wine, where the reservation would move those allocations and with them heap pointers the recordings hold.
+constexpr uintptr_t kMissionBase = 0x11000000;
+void* g_missionBase = nullptr;
+bool OnWine() {
+  static const bool wine = GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != nullptr;
+  return wine;
+}
+void HoldMissionBase() {
+  void* const base = reinterpret_cast<void*>(kMissionBase);
+  MEMORY_BASIC_INFORMATION m{};
+  if (VirtualQuery(base, &m, sizeof(m)) && m.State != MEM_FREE) {
+    Log("mission base: 0x11000000 is taken already (allocation %p); a mission DLL loaded elsewhere may crash", m.AllocationBase);
+    return;
+  }
+  g_missionBase = VirtualAlloc(base, 0x400000, MEM_RESERVE, PAGE_NOACCESS);
+}
+// Whether the PE file `path` names is linked at kMissionBase (its optional header's ImageBase).
+bool LinkedAtMissionBase(const wchar_t* path) {
+  HANDLE f = CreateFileW(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+  if (f == INVALID_HANDLE_VALUE) return false;
+  IMAGE_DOS_HEADER dos{};
+  IMAGE_NT_HEADERS32 nt{};
+  DWORD n = 0;
+  bool linked = ReadFile(f, &dos, sizeof(dos), &n, nullptr) && n == sizeof(dos) && dos.e_magic == IMAGE_DOS_SIGNATURE &&
+                SetFilePointer(f, dos.e_lfanew, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+                ReadFile(f, &nt, sizeof(nt), &n, nullptr) && n == sizeof(nt) && nt.Signature == IMAGE_NT_SIGNATURE &&
+                nt.OptionalHeader.Magic == IMAGE_NT_OPTIONAL_HDR32_MAGIC && nt.OptionalHeader.ImageBase == kMissionBase;
+  CloseHandle(f);
+  return linked;
+}
+using LoadLibraryExWFn = HMODULE(WINAPI*)(const wchar_t*, HANDLE, DWORD);
+LoadLibraryExWFn g_loadLibraryExW = nullptr;
+HMODULE WINAPI MissionLoadHook(const wchar_t* name, HANDLE file, DWORD flags) {
+  if (g_missionBase && name && LinkedAtMissionBase(name)) {
+    VirtualFree(g_missionBase, 0, MEM_RELEASE);
+    g_missionBase = nullptr;
+  }
+  return g_loadLibraryExW(name, file, flags);
+}
+// FreeLibrary as each patched module imported it (another mod's hook, if any, stays in the chain).
+using FreeLibraryFn = BOOL(WINAPI*)(HMODULE);
+FreeLibraryFn g_freeLibrary[3] = {};
+template <int N>
+BOOL WINAPI MissionFreeHook(HMODULE module) {
+  const BOOL r = g_freeLibrary[N](module);
+  if (reinterpret_cast<uintptr_t>(module) == kMissionBase) {
+    MEMORY_BASIC_INFORMATION m{};
+    if (VirtualQuery(module, &m, sizeof(m)) && m.State == MEM_FREE) HoldMissionBase();
+  }
+  return r;
+}
 // Replaces GameImpl::LoadDebugMap() on the no-shell startup path with starting the requested mission.
 ibool __fastcall StartMissionHook(GameImpl* self, void*) {
   g_gsi = {};
@@ -4909,9 +4970,26 @@ extern "C" __declspec(dllexport) void InitMod(const char* /*iniSectionName*/) {
   g_eco          = EnvInt("OP2H_ECO", 0) != 0;
   cfg.width      = EnvInt("OP2H_WIDTH", 1024);
   cfg.height     = EnvInt("OP2H_HEIGHT", 768);
+  cfg.desktop    = EnvInt("OP2H_DESKTOP", 0) != 0;
   g_record       = EnvInt("OP2H_RECORD", 0) != 0;
 
   g_log   = fopen((cfg.out + "\\harness.log").c_str(), "w");
+  if (!OnWine()) {  // the mission DLL's base address (HoldMissionBase)
+    HoldMissionBase();
+    HMODULE opu = GetModuleHandleA("OpuPatch.dll");
+    if (void* prev = opu ? PatchImport(opu, "KERNEL32.dll", "LoadLibraryExW", reinterpret_cast<void*>(&MissionLoadHook)) : nullptr)
+      g_loadLibraryExW = reinterpret_cast<LoadLibraryExWFn>(prev);
+    else if (g_missionBase) {
+      VirtualFree(g_missionBase, 0, MEM_RELEASE);
+      g_missionBase = nullptr;
+      Log("mission base: could not hook OPU's LoadLibraryExW, so 0x11000000 isn't held");
+    }
+    const HMODULE freers[3] = {GetModuleHandleA(nullptr), opu, GetModuleHandleA("op2ext.dll")};
+    void* const freeHooks[3] = {reinterpret_cast<void*>(&MissionFreeHook<0>), reinterpret_cast<void*>(&MissionFreeHook<1>),
+                                reinterpret_cast<void*>(&MissionFreeHook<2>)};
+    for (int i = 0; i < 3; ++i)
+      if (freers[i]) g_freeLibrary[i] = reinterpret_cast<FreeLibraryFn>(PatchImport(freers[i], "KERNEL32.dll", "FreeLibrary", freeHooks[i]));
+  }
   g_telem = cfg.telemEvery > 0 ? fopen((cfg.out + "\\telemetry.jsonl").c_str(), "w") : nullptr;
   g_trace = cfg.traceEvery > 0 ? fopen((cfg.out + "\\trace.jsonl").c_str(), "w") : nullptr;
   g_audio = EnvInt("OP2H_AUDIO", 0) ? fopen((cfg.out + "\\audio.jsonl").c_str(), "w") : nullptr;

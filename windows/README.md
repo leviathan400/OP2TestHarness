@@ -7,7 +7,7 @@ that needs; the rest of OP2TestHarness (src/, test/, run.py's scenario translati
 |---|---|
 | `build.bat` | Builds every DLL a release ships into `build\win` (32-bit, MSVC, reproducible): `harness.dll`, `zScenario.dll`, `zHarnessEnd.dll` and the seven bots |
 | `msvc_compat.h` | Force-included by `build.bat`: C++20, `NOMINMAX`, `__builtin_return_address` -> `_ReturnAddress`, `#undef small` (a Windows SDK macro) |
-| `run_win.py` | `setup` makes a private copy of the game with the harness installed; `run` plays a scenario in it (`--bot` adds a bot); `selftest` is `make check` on Windows |
+| `run_win.py` | `setup` makes a private copy of the game with the harness installed; `run` plays a scenario in it (`--bot` adds a bot); `mission` plays a mission DLL; `selftest` is `make check` on Windows |
 | `package.py` | packs a release: `build\release\OP2TestHarness-<VERSION>-<toolchain>.zip` (`msvc` or `mingw`) with the DLLs, the scripts, the sources and `SHA256SUMS` |
 | `compare.py` | the original vs op2-rs on one scenario: op2-sim's tick-by-tick compare, both pictures side by side |
 | `run_port.py` | `install` copies a built outpost2-port into the game copy; `run` plays a scenario in its `--harness` mode |
@@ -35,7 +35,14 @@ python -I windows\run_win.py run %ORACLE%\scenarios\line_fast.json build\runs\li
 ```
 `setup` copies the game to `game\` (no .avi movies, no OPU backups or logs), installs the two DLLs into
 `game\OPU\Harness` and registers the module in `game\OPU\outpost2.ini`. Run it again after each rebuild. The player's
-own install is never written to. Add `--no-turbo` to `run` to watch the game play in real time.
+own install is never written to. Add `--no-turbo` to `run` to watch the game play in real time (with `--show` to
+see the window: runs are hidden unless they take screenshots or run a bot).
+
+`mission` plays a mission DLL from the game copy (as the Linux harness's `--mission`) and writes the same outputs:
+```
+python -I windows\run_win.py mission cde1.dll build\runs\cde1 --ticks 300
+```
+`--players N` for a multiplayer map, `--telemetry-every`, `--shot-every`, `--no-turbo` and `--show` as for `run`.
 
 To compare with op2-rs's simulation (op2-rs built, `OP2_DIR` set to the game):
 ```
@@ -130,9 +137,16 @@ The port's own `--savetest` hangs after its save at tick 600; it did so before t
 ## Known differences from the Linux harness
 - The window's client area is 1032x766, not 1024x768: the ini's frame padding (+48, +36) is Wine's. Screenshots
   differ in size from Linux runs; the simulation is unaffected.
-- The game window opens on the desktop at 0,0 and takes focus, and `ParkCursor` moves the real mouse pointer to the
-  screen's corner for the run.
-- `run_win.py` covers scenarios only, not `--mission`, `--campaign`, `--record`, checkpoints or shell mode.
+- The desktop is left alone: `run_win.py` sets `OP2H_DESKTOP=1`, so the harness doesn't move the real mouse pointer
+  (`ParkCursor`) or bring the game to the front. The game window starts hidden (`SW_HIDE`), or shown without taking
+  focus (`SW_SHOWNOACTIVATE`) when screenshots, a bot or `--show` need it drawn. Scenario results are the same either
+  way (line_fast, cmb_duel_laser, cmb_duel_rail_gun and bgrp_order: byte-identical traces, telemetry and gamedata).
+- Mission DLLs are linked at 0x11000000, and some (the OfficialDemos cde1, cdp1 and ml4_dm1) crash when loaded
+  anywhere else. Windows can give that address to one of the game's own allocations before OPU loads the mission, so
+  on Windows (not under Wine) the harness reserves it at startup and lets it go when OPU loads a DLL linked there.
+  The game's block then lands elsewhere, so heap pointers in telemetry's `raw` bytes (a Garage's bays) differ from
+  Wine runs; the simulation is unaffected.
+- `run_win.py` covers scenarios and missions (`mission`), not `--campaign`, `--record`, checkpoints or shell mode.
 
 ## Do not commit
 `game\` (a copy of the game's files), `build\` and `vendor\include\Tethys` (an upstream clone) stay out of version
