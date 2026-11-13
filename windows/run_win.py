@@ -139,7 +139,7 @@ def run_mission(a) -> int:
 def launch(harness_env: dict, out: Path, timeout: float, shown: bool = True) -> dict:
     """Starts Outpost2.exe /OPU in the game copy with these OP2H_* settings and waits (killing it after `timeout` s).
     `shown`: the window is shown without taking focus (it must be, to draw), else hidden. Returns the run's summary:
-    exit code, timeout, wall time, screenshots (converted to PNG), how the game ended (the last telemetry line's `end`),
+    the platform, exit code, timeout, wall time, screenshots (converted to PNG), how the game ended (the last telemetry line's `end`),
     suppressed dialogs, the bot line, the quit line and `ok`."""
     start = time.monotonic()
     startup = subprocess.STARTUPINFO()
@@ -162,7 +162,7 @@ def launch(harness_env: dict, out: Path, timeout: float, shown: bool = True) -> 
             break
         except (json.JSONDecodeError, KeyError):
             continue
-    return {"exit_code": code, "timed_out": timed_out, "wall_seconds": round(time.monotonic() - start, 1),
+    return {"platform": "windows", "exit_code": code, "timed_out": timed_out, "wall_seconds": round(time.monotonic() - start, 1),
             "screenshots": to_png(out), "game_term_reason": run.END_REASONS.get(end, end),
             "dialogs": [l[len("dialog: "):] for l in hlog.splitlines() if l.startswith("dialog: ")],
             "bot": next((l for l in hlog.splitlines() if l.startswith("bot: ")), None),

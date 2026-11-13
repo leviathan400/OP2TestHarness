@@ -111,8 +111,11 @@ The exit status is 0 when the run reached its tick limit or the mission ended.
 
 ## Outputs
 
-- `summary.json`: exit code, whether it timed out, wall time, last tick, how the game ended (`Running`,
-  `MissionAccomplished`, `MissionFailed`, ...), screenshot count, and any game dialogs that were suppressed.
+- `summary.json`: the platform the game ran on (`wine` from run.py, `windows` from windows/run_win.py), exit code,
+  whether it timed out, wall time, last tick, how the game ended (`Running`, `MissionAccomplished`, `MissionFailed`,
+  ...), screenshot count, and any game dialogs that were suppressed. A native Windows run's screenshots differ from
+  Wine's (Windows' GDI lays out some Arial glyphs differently, e.g. from "g" on), and so do the heap pointers its
+  traces hold, so a user can keep such runs out of its references by this field.
 - `telemetry.jsonl`: one object per sample:
   ```json
   {"tick":3000,"mark":30,"end":0,

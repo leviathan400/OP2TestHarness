@@ -44,6 +44,8 @@ says which runs change and why.
   or the new `--show` need the window drawn.
 - `windows/run_win.py mission DLL OUT_DIR`: plays a mission DLL on Windows (`--ticks`, `--players`,
   `--telemetry-every`, `--shot-every`, `--no-turbo`, `--show`).
+- `summary.json` says which platform the game ran on: `"platform": "wine"` (run.py) or `"windows"`
+  (windows/run_win.py), so a native run can't be taken for a Wine reference by accident.
 
 **Fixed**
 - Native Windows: the OfficialDemos cde1, cdp1 and ml4_dm1 crashed at load (0xC0000005). They lack relocations and

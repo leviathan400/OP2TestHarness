@@ -513,6 +513,7 @@ def main() -> int:
             break
     quit_line = next((l for l in hlog.splitlines() if l.startswith("quit at tick")), None)
     summary = {
+        "platform": "wine",
         "mission": mission, "scenario": str(args.scenario) if scn else None, "exit_code": code, "timed_out": timed_out, "wall_seconds": round(elapsed, 1),
         "last_telemetry_tick": last_tick, "game_term_reason": END_REASONS.get(end, end), "screenshots": shots,
         "dialogs": [l[len("dialog: "):] for l in hlog.splitlines() if l.startswith("dialog: ")],
