@@ -31,6 +31,8 @@ says which runs change and why.
 ## Unreleased
 
 **Added** (MINOR: every existing recording replays identically)
+- `run.py --trace-zstd`: when the run ends, `trace.jsonl` becomes `trace.jsonl.zst` (zstd level 3, same content, verified
+  by reading it back before the plain file is removed). Off by default; without it nothing changes.
 - `netgame.py --lobby-chat "HOST|JOINER"`: the host and the first joiner chat in GAME SETTINGS once every joiner is
   ready; each machine shoots and dumps its lobby after each line.
 - `netgame.py --join-ticks T`: the first joiner plays only to tick T (its script leaves the game there: End Mission, a

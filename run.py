@@ -6,7 +6,7 @@ Example:
 
     ./run.sh --scenario $ORACLE/scenarios/line_fast.json --out /tmp/op2scn
 
-Outputs in --out: telemetry.jsonl, trace.jsonl, gamedata.json, shot_<tick>.png, harness.log, wine.log, summary.json.
+Outputs in --out: telemetry.jsonl, trace.jsonl (trace.jsonl.zst with --trace-zstd), gamedata.json, shot_<tick>.png, harness.log, wine.log, summary.json.
 """
 import argparse
 import fcntl
@@ -24,6 +24,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import prefixes  # noqa: E402
+import tracezstd  # noqa: E402
 
 # Harness runs use their own Wine prefix when one exists (prefix-harness/, a copy of prefix/), so they get their own
 # wineserver and can't steal focus from, or swap DLLs under, a game being played from prefix/. OP2_HARNESS_PREFIX
@@ -305,6 +306,9 @@ def main() -> int:
                          "--trace-raw run's trace stays small)")
     ap.add_argument("--trace-map", action="store_true",
                     help="add the map tiles changed since the previous trace line (default: the scenario's traceMap)")
+    ap.add_argument("--trace-zstd", action="store_true",
+                    help="when the run ends, replace trace.jsonl with trace.jsonl.zst (zstd level 3, same content; "
+                         "the plain file stays if compressing or the read-back check fails)")
     ap.add_argument("--campaign", type=Path, metavar="FILE",
                     help="start as a campaign mission with this carry-over (key value lines, see harness.cpp)")
     ap.add_argument("--unload", action="store_true",
@@ -407,7 +411,7 @@ def main() -> int:
     if args.record and not os.environ.get("OP2H_SAVES_LOCK_HELD"):
         saves_lock = lock_saves(f"run.py --record --mission {args.mission} --out {out}")
     for old in [*out.glob("shot_*.bmp"), *out.glob("shot_*.png"), out / "telemetry.jsonl", out / "harness.log",
-                out / "timeout_screen.png", out / "summary.json", out / "trace.jsonl", out / "gamedata.json", out / "audio.jsonl",
+                out / "timeout_screen.png", out / "summary.json", out / "trace.jsonl", out / "trace.jsonl.zst", out / "gamedata.json", out / "audio.jsonl",
                 out / "scenario_script.txt", out / "state.json", out / "events.jsonl", out / "present.log"]:
         old.unlink(missing_ok=True)
     mission = fit_script_name(args.mission) if args.mission else None
@@ -504,6 +508,8 @@ def main() -> int:
         xvfb.terminate()
         xvfb.wait()
 
+    if args.trace_zstd:
+        tracezstd.compress_trace(out)
     shots = convert_shots(out, args.keep_bmp)
     hlog = (out / "harness.log").read_text(errors="replace") if (out / "harness.log").exists() else ""
     last_tick, end = 0, None
